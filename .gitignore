@@ -1,0 +1,32 @@
+# Python
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+*.local
+.python-version
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
