@@ -1,161 +1,379 @@
-# YouTube Trending Videos — Implementation Plan
+# YouTube Trending Videos - Combined Implementation Plan
 
-**Project:** EDA on YouTube Trending Videos (Topic 6) + FastAPI backend + LLM/AI-powered frontend
-**Stack:** Python (pandas/EDA) → FastAPI → LangChain (agent) → React frontend
+**Project:** Project 2 Exploratory Data Analysis on YouTube Trending Videos with FastAPI, React visualizations, and LLM-assisted analysis features  
+**Primary deliverable:** A polished GitHub technical report with notebook-based EDA, README, data files, presentation PDF, and an interactive React/JavaScript dashboard backed by FastAPI.  
+**Priority rule:** Official requirements in `project-req/` define the report, EDA, README, and presentation expectations. The original FastAPI, React, LangChain, and LLM requirements remain part of the main implementation plan, not optional stretch work.
 
 ---
 
-## 1. Architecture Overview
+## 1. Requirement Priority
+
+### Core Official Deliverables
+
+These are grading-critical and must be completed:
+
+1. **README.md** that replaces the starter README and introduces the project.
+2. **Jupyter notebook(s)** with EDA, visualizations, statistical analysis, markdown explanation, and final recommendations.
+3. **Data files** included in a clear `data/` structure, or documented with source links if too large.
+4. **Presentation slideshow rendered as PDF** for a non-technical audience.
+5. **Clear problem statement** and measurable objectives.
+6. **Clean project organization** with appropriate file names, relative paths, no unnecessary files, and reproducible notebooks.
+
+### Core Application Deliverables
+
+These are part of this project's intended implementation and should not be demoted:
+
+1. **FastAPI backend** that serves cleaned data, chart-ready statistics, and AI endpoints.
+2. **React/Vite frontend** that renders interactive JavaScript visualizations.
+3. **LangChain SQL agent** for natural-language questions over the cleaned dataset.
+4. **LLM-powered insights** for short written summaries based on precomputed statistics.
+5. **Read-only SQLite database** for the LangChain agent.
+
+### Academic Integrity Constraint
+
+The official requirements state that generative AI tools must not be used to create or copy-paste submitted code or presentations. If AI is used, keep it strictly aligned with instructor permissions and make sure submitted code, notebook analysis, README, and slides are student-authored and understood.
+
+For this project, LLM features should be framed as part of the app's functionality, not as a replacement for the student's own analysis, code understanding, README, or presentation.
+
+---
+
+## 2. Architecture Overview
 
 ```text
-                         ┌───────────────────────┐
-                         │   React Frontend      │
-                         │ (charts + AI chat box)│
-                         └───────────┬───────────┘
-                                     │ REST / JSON
-                                     ▼
-                         ┌───────────────────────┐
-                         │      FastAPI           │
-                         │  /stats/*  (precomputed)
-                         │  /ai/ask   (LangChain agent)
-                         │  /ai/insights (summary LLM)
-                         └───────┬───────┬───────┘
-                                 │       │
-                    ┌────────────┘       └────────────┐
-                    ▼                                 ▼
-        ┌───────────────────┐               ┌───────────────────┐
-        │ Cleaned dataset    │               │  LangChain Agent   │
-        │ (Parquet, used by  │               │  (create_agent +   │
-        │  /stats endpoints) │               │  read-only SQL     │
-        └───────────────────┘               │  tools)            │
-                                             └─────────┬─────────┘
-                                                        ▼
-                                             ┌───────────────────┐
-                                             │ SQLite / Postgres  │
-                                             │  READ-ONLY user    │
-                                             │ (loaded from the   │
-                                             │  same cleaned data)│
-                                             └───────────────────┘
+React frontend
+  |-- interactive charts and dashboard UI
+  |-- filters for date, category, channel, and top-N
+  |-- AI chat and AI insights panel
+  |
+  `-- REST/JSON calls
+      |
+      v
+FastAPI backend
+  |-- /videos
+  |-- /stats/*
+  |-- /ai/insights
+  |-- /ai/ask
+      |
+      |-- pandas / Parquet for deterministic chart stats
+      |
+      `-- LangChain SQL agent
+          `-- read-only SQLite database built from cleaned data
 ```
 
-Two parallel data paths on purpose:
-- **`/stats/*`** endpoints serve *precomputed* aggregates (fast, deterministic, no LLM latency/cost) — this is what your charts should call.
-- **`/ai/ask`** is the natural-language layer on top of the same data, via a LangChain agent with a read-only SQL tool — this is what your chat box calls.
+Use two data paths intentionally:
 
-Never make chart rendering depend on an LLM call. The AI layer is additive, not the plumbing.
+1. **Chart path:** React charts call deterministic `/stats/*` endpoints. These endpoints read precomputed aggregates or the cleaned Parquet/CSV file and should not depend on an LLM.
+2. **AI path:** AI chat calls `/ai/ask`, which uses a constrained LangChain SQL agent against read-only SQLite.
 
----
-
-## 2. Priority Legend
-
-Requirements are grouped by **necessity tier** (most needed → least needed). Within each tier, items are ordered **easiest → hardest**, since equally necessary items should be tackled in that order.
-
-- 🔴 **Tier 1 — Core deliverable.** Project fails without this.
-- 🟠 **Tier 2 — Needed to expose the work.** Backend/API layer.
-- 🟡 **Tier 3 — Standout addition.** Frontend + AI/LLM integration.
+This keeps the dashboard fast and reproducible while still supporting natural-language exploration.
 
 ---
 
-## 3. 🔴 Tier 1a — Data Cleaning
+## 3. Recommended Project Structure
 
-1. **Load & inspect** — shape, dtypes, `.info()`, `.isna().sum()`, sample rows.
-2. **Fix data types** — parse `trending_date` / `publish_date` as `datetime64`; coerce `views`/`likes`/`dislikes`/`comment_count` to numeric; cast `comments_disabled`/`ratings_disabled` to `bool`.
-3. **Handle missing values** — decide per column: drop, impute, or flag as `unknown`. Document the decision, don't just silently drop.
-4. **Handle duplicate rows** — a video appears once per day it trends. Explicitly decide:
-   - Keep all rows → for "how many days did X trend" analysis.
-   - Dedupe to one row per video (latest snapshot, or first-seen) → for per-video engagement stats.
-   You will likely need **both** views later, so keep the raw (deduped-by-key) table and a `days_trending` aggregate table side by side.
-5. **Fix logical inconsistencies** — `comment_count` should be 0/NaN where `comments_disabled=True`; same for likes/dislikes where `ratings_disabled=True`. Flag/clip impossible values (negative counts, likes > views, etc.).
-6. **Clean `tags`** — split on `|`, lowercase, strip placeholder values like `[none]`, strip quotes.
-7. **Feature engineering** *(hardest — depends on everything above)*:
+Use a structure that supports both the official report deliverables and the full-stack app:
+
+```text
+youtube-ds/
+|-- README.md
+|-- IMPLEMENTATION.md
+|-- requirements.txt
+|-- data/
+|   |-- raw/
+|   |   `-- youtube_trending_raw.csv
+|   |-- processed/
+|   |   |-- youtube_clean.csv
+|   |   `-- youtube_clean.parquet
+|   |-- youtube.db
+|   `-- data_dictionary.md
+|-- notebooks/
+|   `-- 01_youtube_trending_eda.ipynb
+|-- scripts/
+|   |-- build_sqlite_db.py
+|   `-- prepare_data.py
+|-- backend/
+|   |-- requirements.txt
+|   `-- app/
+|       |-- main.py
+|       |-- routers/
+|       |   |-- stats.py
+|       |   `-- ai.py
+|       |-- services/
+|       |   |-- data_service.py
+|       |   `-- sql_agent.py
+|       `-- db/
+|           `-- connection.py
+|-- frontend/
+|   |-- package.json
+|   `-- src/
+|       |-- App.tsx
+|       |-- api/
+|       |-- components/
+|       |-- pages/
+|       `-- styles.css
+|-- presentation/
+|   `-- youtube_trending_presentation.pdf
+|-- images/
+|   `-- selected_visualizations.png
+`-- scratch/
+    `-- optional_experiments/
+```
+
+Notes:
+
+1. Do not commit `.venv/`, `node_modules/`, `dist/`, `__pycache__/`, or temporary notebook checkpoint files.
+2. Use relative paths in notebooks, scripts, and app code.
+3. Keep incomplete or unused work in `scratch/` or remove it before submission.
+
+---
+
+## 4. Problem Statement and Objectives
+
+The project must start with a specific, concise problem statement and measurable objectives.
+
+### Draft Problem Statement
+
+Content creators and marketing teams need to understand which YouTube video characteristics are associated with trending performance. This project analyzes YouTube trending video data across the available time period to identify which channels, publishing patterns, tags, categories, and engagement signals are most associated with high views and sustained trending activity.
+
+Refine this after inspecting the dataset. If the dataset has a clear country, region, or time range, include it in the final problem statement.
+
+### Draft Objectives
+
+1. Identify the top channels and categories by trending frequency, views, and engagement.
+2. Measure how engagement metrics such as likes, comments, and like ratio relate to view counts.
+3. Analyze whether publishing timing or trending date patterns are associated with better performance.
+4. Identify common tags or content themes among high-performing trending videos.
+5. Produce clear, data-driven recommendations for creators or marketing teams.
+6. Provide an interactive dashboard so users can explore the findings dynamically.
+7. Provide an AI question-answering layer for natural-language exploration of the cleaned dataset.
+
+Each objective should be answered directly in the notebook and reflected in the README, presentation, and application.
+
+---
+
+## 5. Core Notebook Requirements
+
+Use the official `project-req/EDA_template.ipynb` structure as the baseline. Do not remove requested sections.
+
+The final notebook should include:
+
+1. Project title.
+2. Introduction to the topic.
+3. Problem statement.
+4. Objectives.
+5. Data info and descriptive statistics.
+6. Data cleaning and handling.
+7. Analysis that answers each objective.
+8. Visualizations with labels, readable scales, and interpretation.
+9. Bullet-point summary.
+10. Bullet-point recommendations and conclusion.
+
+Before submission:
+
+1. Restart the kernel and run all cells.
+2. Remove unused imports.
+3. Remove broken, exploratory, or duplicate cells.
+4. Confirm all paths are relative.
+5. Confirm all charts render correctly.
+6. Confirm markdown explains what each section contributes to the problem statement.
+
+---
+
+## 6. Data Cleaning Plan
+
+1. **Load and inspect**
+   - Check shape, columns, dtypes, `.info()`, `.describe()`, missing values, and sample rows.
+
+2. **Fix data types**
+   - Parse date columns such as `trending_date` and `publish_date`.
+   - Convert `views`, `likes`, `dislikes`, and `comment_count` to numeric.
+   - Convert flags such as `comments_disabled`, `ratings_disabled`, and `video_error_or_removed` to boolean if present.
+
+3. **Handle missing values**
+   - Decide column by column whether to drop, impute, or label as `unknown`.
+   - Document every important decision in markdown.
+
+4. **Handle duplicate rows**
+   - YouTube trending datasets often include the same video on multiple trending days.
+   - Keep a row-level trending dataset for time-based analysis.
+   - Create a per-video view for video-level analysis, using the first or latest trending snapshot.
+   - Create `days_trending` if repeated daily rows are available.
+
+5. **Fix logical inconsistencies**
+   - Check for negative counts.
+   - Check impossible relationships such as likes greater than views.
+   - Handle disabled comments or ratings consistently.
+
+6. **Clean text columns**
+   - Strip whitespace.
+   - Normalize tags by splitting on `|`.
+   - Lowercase tags for frequency analysis.
+   - Remove placeholders such as `[none]`.
+
+7. **Engineer features**
    - `engagement_rate = (likes + comment_count) / views`
    - `like_ratio = likes / (likes + dislikes)`
    - `days_to_trend = trending_date - publish_date`
-   - `unique_video_key = title + channel_title` (or a real video ID if present) — this becomes your LLM-classification join key later.
+   - `published_day_of_week`
+   - `published_hour`
+   - `tag_count`
+   - `days_trending`
+   - `unique_video_key`
 
-**Output of this phase:** a single cleaned `youtube_clean.parquet` (Parquet, not CSV — preserves dtypes and is much faster to reload) that every later phase reads from.
-
----
-
-## 4. 🔴 Tier 1b — EDA
-
-1. **Descriptive statistics** — mean/median/std/quantiles for numeric columns.
-2. **Univariate distributions** — views/likes/comments (expect heavy right-skew; use log scale).
-3. **Time patterns** — by `published_day_of_week`, volume over `trending_date`.
-4. **Channel-level analysis** — top channels by frequency / avg views / avg engagement.
-5. **Correlation analysis** — views vs. likes vs. comments vs. engagement_rate.
-6. **Tag frequency analysis** — most common tags, co-occurrence.
-7. **LLM category enrichment** *(hardest, see §7 for the scaling plan)* — classify each **unique** video (not every row) into a fixed taxonomy via batched LLM calls, using structured/JSON output. This is what answers "what types of content trend most."
-8. **Category-level engagement analysis** — groupby category → views/engagement (answers "which categories get the most engagement").
+8. **Save cleaned data**
+   - Save to `data/processed/youtube_clean.csv`.
+   - Save to `data/processed/youtube_clean.parquet` if `pyarrow` is installed.
+   - Build `data/youtube.db` from the cleaned data for the SQL agent.
 
 ---
 
-## 5. 🔴 Tier 1c — Visualization
+## 7. EDA Requirements
 
-1. Histograms / boxplots for views, likes, engagement.
-2. Correlation heatmap.
-3. Bar charts — top channels, categories, day-of-week.
-4. Time series — trending volume/engagement over time.
-5. Tag frequency chart.
-6. Assembled, styled notebook dashboard *(hardest — polish, not new analysis)*.
+The official rubric evaluates data cleaning, EDA, statistical analysis, visualizations, and clarity of message. The analysis should be organized around the objectives, not around random charts.
+
+Required analysis:
+
+1. **Descriptive statistics**
+   - Mean, median, standard deviation, min, max, and quantiles for numeric fields.
+   - Explain skewed metrics such as views and likes.
+
+2. **Univariate distributions**
+   - Views, likes, comments, engagement rate, days to trend.
+   - Use log scale where needed because video metrics are usually right-skewed.
+
+3. **Time patterns**
+   - Trending volume by date.
+   - Publishing day of week.
+   - Publishing hour if available.
+   - Days from publish date to trending date.
+
+4. **Channel-level analysis**
+   - Top channels by trending frequency.
+   - Top channels by average or median views.
+   - Top channels by engagement rate.
+
+5. **Category-level analysis**
+   - If category IDs and category names are available, map IDs to readable labels.
+   - Compare categories by views, engagement, and trending frequency.
+   - If category labels are not available, document the limitation.
+
+6. **Correlation analysis**
+   - Views vs likes.
+   - Views vs comments.
+   - Likes vs comments.
+   - Engagement rate vs views.
+   - Use correlation heatmap and interpret carefully.
+
+7. **Tag analysis**
+   - Most frequent tags.
+   - Tag count distribution.
+   - Tags associated with high views or high engagement.
+
+8. **Outlier analysis**
+   - Identify extreme videos by views, engagement, and trending duration.
+   - Explain whether outliers are valid observations or data quality issues.
+
+9. **Recommendations**
+   - Every recommendation must directly follow from the analysis.
+   - Avoid unsupported claims or speculation.
 
 ---
 
-## 6. Scaling the LLM Categorization (large dataset)
+## 8. Visualization Requirements
 
-Do this **before** writing agent/API code — it produces the `category` column everything downstream depends on.
+Use visuals that directly support the narrative and final recommendations.
 
-1. **Dedupe first.** Classify each unique `(title, channel_title)` once; join the label back onto all rows. Report the dedup ratio (`unique / total`) — likely 5–50x fewer calls than naive per-row classification.
-2. **Batch requests.** Send 25–50 titles per call, request a JSON array back in the same order (or use per-item `custom_id` if using the Batch API).
-3. **Use the Batch API** for the bulk offline classification job (this is not a live chat, so async batch processing is the right fit — cheaper, no rate-limit pressure).
-4. **Use a small/cheap model** for classification; reserve a larger model for the insight-narration feature.
-5. **Cache to disk** — `category_cache.jsonl` keyed by `unique_video_key`; skip already-classified videos on rerun.
-6. **Sample if needed.** If even deduped+batched classification is too large/expensive, use a stratified random sample (stratified by date, so all time periods are represented) and say so explicitly with a confidence-interval caveat.
-7. **Evaluate it.** Hand-label ~30–50 videos, compare against LLM output, report accuracy. This one step is what makes the categorizer "engineered" rather than "vibes."
+Recommended notebook visuals:
+
+1. Histogram or boxplot of views using log scale.
+2. Histogram or boxplot of engagement rate.
+3. Bar chart of top channels by trending frequency.
+4. Bar chart of top categories by median views or engagement.
+5. Line chart of trending volume over time.
+6. Bar chart by publishing day of week.
+7. Correlation heatmap.
+8. Tag frequency chart.
+9. Scatterplot of views vs likes or views vs comments.
+
+React dashboard visuals:
+
+1. KPI cards for total rows, unique videos, unique channels, date range, and median views.
+2. Interactive line chart for trending volume over time.
+3. Top channels bar chart with top-N control.
+4. Category performance chart if category labels are available.
+5. Engagement distribution chart.
+6. Views vs likes/comments scatterplot.
+7. Tag frequency visualization.
+8. Filter controls for date range, category, channel, and top-N.
+
+Chart quality requirements from the official presentation standards:
+
+1. Use readable labels and appropriate chart types.
+2. Format large numbers with K, M, or B.
+3. Use percentages where appropriate.
+4. Use consistent colors.
+5. Avoid clutter.
+6. Make charts interpretable to a non-technical audience.
+
+---
+
+## 9. FastAPI Backend Requirements
+
+Build the backend after cleaned data exists.
+
+Required endpoints:
+
+1. `GET /`
+   - Health check and project metadata.
+
+2. `GET /videos?limit=50`
+   - Returns a limited sample of cleaned videos.
+
+3. `GET /stats/summary`
+   - Returns high-level dashboard metrics.
+
+4. `GET /stats/top-channels`
+   - Query params: `limit`, `start_date`, `end_date`, `category`.
+
+5. `GET /stats/categories`
+   - Returns category-level counts, views, and engagement.
+
+6. `GET /stats/trending-over-time`
+   - Returns chart-ready time series data.
+
+7. `GET /stats/engagement`
+   - Returns engagement distributions and summary metrics.
+
+8. `GET /stats/tags`
+   - Returns most frequent tags and optional performance metrics.
+
+9. `POST /ai/insights`
+   - Feeds a compact precomputed summary into an LLM and returns written key findings.
+
+10. `POST /ai/ask`
+   - Uses a LangChain SQL agent to answer natural-language questions from the cleaned dataset.
+
+Backend rules:
+
+1. Chart endpoints should be deterministic and should not call an LLM.
+2. Return chart-shaped JSON where practical, such as `{ "labels": [], "values": [] }`.
+3. Add query-param filtering for date range, category, and channel.
+4. Keep LLM latency isolated to `/ai/*`.
+5. Validate user inputs and cap returned rows.
+
+---
+
+## 10. LangChain and LLM Requirements
+
+The AI layer should be useful but constrained.
+
+### Read-Only SQLite
+
+Build `data/youtube.db` from `data/processed/youtube_clean.parquet` or `.csv`.
 
 ```python
-# scripts/categorize_videos.py  (sketch)
-import json, anthropic
-
-client = anthropic.Anthropic()
-TAXONOMY = ["Music","Gaming","Comedy","News/Politics","Tech Review",
-            "Tutorial/How-to","Vlog","Sports","Beauty/Fashion","Movie/TV Promo","Other"]
-
-def classify_batch(videos: list[dict]) -> list[str]:
-    prompt = (
-        "Classify each video into exactly one category from this list: "
-        f"{TAXONOMY}.\nReturn ONLY a JSON array of strings, one per video, same order.\n\n"
-        + "\n".join(f"{i+1}. title={v['title']!r} tags={v['tags']!r}" for i, v in enumerate(videos))
-    )
-    resp = client.messages.create(
-        model="claude-haiku-4-5",       # cheap model for bulk labeling
-        max_tokens=1000,
-        temperature=0,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return json.loads(resp.content[0].text)
-```
-
----
-
-## 7. 🟠 Tier 2 — FastAPI Backend
-
-Ordered easiest → hardest:
-
-1. **Scaffold + one endpoint** serving the cleaned dataset as JSON (`GET /videos?limit=50`).
-2. **Precomputed `/stats/*` endpoints** — top channels, category breakdown, engagement by category. These just read the Parquet/aggregate tables computed in Phase 4 — no LLM involved, fast.
-3. **Query-param filtering** — date range, category, channel on the stats endpoints.
-4. **Chart-shaped endpoints** — return data pre-formatted for whatever chart library the frontend uses (e.g., `{labels: [...], values: [...]}`).
-5. **`/ai/insights`** — feed a precomputed summary table to an LLM, return a written "key findings" paragraph. Simple: one call, no tools, no agent loop.
-6. **`/ai/ask`** — the LangChain SQL agent endpoint *(hardest piece — full design below)*.
-
-### 7.1 Data layer for the agent: read-only SQLite
-
-Don't point the agent at a live Postgres unless you already run Postgres. For a project, load your cleaned Parquet into a **SQLite** file once, and open it **read-only** at connection time — this is the SQLite equivalent of the "read-only DB user" pattern from your reference doc, since SQLite has no `GRANT`/roles system.
-
-```python
-# scripts/build_sqlite_db.py
-import pandas as pd, sqlite3
+import sqlite3
+import pandas as pd
 
 df = pd.read_parquet("data/processed/youtube_clean.parquet")
 con = sqlite3.connect("data/youtube.db")
@@ -163,199 +381,155 @@ df.to_sql("videos", con, if_exists="replace", index=False)
 con.close()
 ```
 
-```python
-# backend/app/db/connection.py
-import sqlite3
-
-def get_readonly_connection():
-    # mode=ro -> SQLite refuses any write at the OS/file level, not just app level
-    return sqlite3.connect("file:data/youtube.db?mode=ro", uri=True)
-```
-
-If you'd rather demonstrate the Postgres/GRANT pattern from your reference doc for extra credit, the same idea applies 1:1 — create a `videos_ai_reader` role with `SELECT`-only privileges and connect the agent through that role, never through the app's main DB user.
-
-### 7.2 The LangChain agent (current recommended pattern)
-
-As of LangChain's current agent API, the recommended approach is **`create_agent`** (from `langchain.agents`) combined with a small set of hand-written tools decorated with `@tool` — not the older `create_sql_agent`/`SQLDatabaseToolkit` helper, which is legacy. The model decides on its own whether a question needs a tool call at all, exactly like your reference doc describes.
+Open the database in read-only mode for the agent:
 
 ```python
-# backend/app/services/sql_agent.py
-import sqlite3
-from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
-from langchain.tools import tool
-
-DB_PATH = "data/youtube.db"
-FORBIDDEN = ("insert", "update", "delete", "drop", "truncate", "alter", "create", "grant", "revoke")
-
-def _connect():
-    return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-
-@tool
-def list_tables() -> str:
-    """Return the comma-separated list of tables in the database."""
-    con = _connect()
-    try:
-        rows = con.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
-        return ", ".join(r[0] for r in rows)
-    finally:
-        con.close()
-
-@tool
-def get_schema(table_names: str) -> str:
-    """Given a comma-separated list of table names, return their CREATE TABLE
-    statements plus 3 sample rows each. Call list_tables first to confirm names."""
-    con = _connect()
-    try:
-        out = []
-        for t in [x.strip() for x in table_names.split(",")]:
-            schema = con.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?;", (t,)
-            ).fetchone()
-            if not schema:
-                out.append(f"Error: table {t!r} not found")
-                continue
-            sample = con.execute(f'SELECT * FROM "{t}" LIMIT 3;').fetchall()
-            out.append(f"{schema[0]}\n-- sample rows --\n{sample}")
-        return "\n\n".join(out)
-    finally:
-        con.close()
-
-@tool
-def run_query(query: str) -> str:
-    """Execute a read-only SQL SELECT query against the videos database and
-    return the rows. Only SELECT statements are allowed."""
-    q = query.strip().lower()
-    if not q.startswith("select") or any(w in q for w in FORBIDDEN):
-        return "Error: only single SELECT statements are permitted."
-    con = _connect()
-    try:
-        cur = con.execute(query)
-        rows = cur.fetchmany(200)  # hard cap regardless of what the model asks for
-        return str(rows)
-    except Exception as e:
-        return f"Error: {e}"
-    finally:
-        con.close()
-
-SYSTEM_PROMPT = """
-You are a data analyst for a YouTube trending-videos dataset.
-Answer ONLY using the `videos` table via the tools provided.
-Always call list_tables and get_schema before writing a query if you have not
-already seen the schema this conversation.
-Never write DML (INSERT/UPDATE/DELETE/DROP/ALTER) — you are read-only.
-Limit results to at most 20 rows unless the user asks for more.
-If the question can't be answered from this database, say so plainly.
-"""
-
-model = init_chat_model("claude-sonnet-4-6")
-agent = create_agent(
-    model,
-    tools=[list_tables, get_schema, run_query],
-    system_prompt=SYSTEM_PROMPT,
-)
+sqlite3.connect("file:data/youtube.db?mode=ro", uri=True)
 ```
 
-```python
-# backend/app/routers/ai.py
-from fastapi import APIRouter
-from pydantic import BaseModel
-from app.services.sql_agent import agent
+### Agent Safety
 
-router = APIRouter(prefix="/ai")
+Implement defense in depth:
 
-class AskRequest(BaseModel):
-    question: str
+1. Use SQLite read-only mode.
+2. Only allow `SELECT` statements in the query tool.
+3. Reject write keywords such as `insert`, `update`, `delete`, `drop`, `truncate`, `alter`, `create`, `grant`, and `revoke`.
+4. Cap query result rows.
+5. Tell the agent to answer only from the dataset and to say when the data cannot answer a question.
 
-@router.post("/ask")
-def ask(req: AskRequest):
-    result = agent.invoke({"messages": [{"role": "user", "content": req.question}]})
-    return {"answer": result["messages"][-1].content}
-```
+### LLM Feature Scope
 
-### 7.3 Defense in depth (do all three, not just one)
-
-1. **Read-only file mode** (`?mode=ro`) — even if the model tries a write, SQLite rejects it at the OS level.
-2. **Query validation in `run_query`** — reject anything not starting with `SELECT` or containing a forbidden keyword, *before* it ever reaches the database.
-3. **Row cap** (`fetchmany(200)`) — bounds worst-case response size regardless of what the agent requests.
-4. *(Optional, stretch)* — wrap `run_query` with LangChain's `HumanInTheLoopMiddleware` so a human approves the generated SQL before execution; useful to demo in a report even if you auto-approve in practice.
-
-### 7.4 Why two data paths (recap)
-
-`/stats/*` reads Parquet directly with pandas — deterministic, instant, no API cost. `/ai/ask` goes through the agent — flexible natural language, but slower and non-deterministic. Keep your dashboards on the first path; only the chat feature uses the second.
+1. `/ai/insights` should summarize precomputed statistics, not raw full data.
+2. `/ai/ask` should use the SQL agent and constrained tools.
+3. Optional category enrichment can be done only if permitted by the instructor and documented clearly.
+4. AI-generated text should not replace the student's own final recommendations in the notebook, README, or slides.
 
 ---
 
-## 8. 🟡 Tier 3 — Frontend
+## 11. React and JavaScript Dashboard Requirements
 
-1. Scaffold + fetch from `/stats/*`, render a basic table.
-2. Static charts fed by API data (Recharts is a natural fit if you build in React).
-3. Interactive filters wired to query params (category dropdown, date range).
-4. Dashboard layout — multiple synced charts, responsive grid.
-5. Loading/error states + styling polish.
-6. **AI chat panel** calling `/ai/ask` and `/ai/insights` *(hardest — needs to handle multi-second latency gracefully: show a "thinking" state, stream if you want it to feel snappy)*.
+Core frontend requirements:
 
----
+1. React/Vite application under `frontend/`.
+2. API client module for FastAPI calls.
+3. Dashboard page with multiple chart sections.
+4. Interactive filters wired to backend query params.
+5. Loading, empty, and error states.
+6. Responsive layout for desktop and mobile.
+7. AI insights panel calling `/ai/insights`.
+8. AI question box calling `/ai/ask`.
 
-## 9. 🟡 Tier 3 — AI Engineering Rigor (the "why this stands out" layer)
+Recommended chart library:
 
-These are the details a grader will notice if you call them out explicitly in your report/README:
+1. Recharts for fast implementation.
+2. Plotly.js if richer interactivity is needed.
+3. D3 only if custom visualization is required.
 
-1. **Evaluated categorizer** — hand-labeled validation set + reported accuracy (§6.7).
-2. **Structured outputs** — JSON-only responses for classification, parsed strictly, no regex scraping of prose.
-3. **Cost/latency awareness** — dedup ratio, batching, cheap-model-for-bulk-task, cached results, printed cost estimate before running.
-4. **Constrained agent, not free-form code-gen** — the SQL agent can only run validated `SELECT` statements through a scoped tool, never arbitrary Python/pandas execution. This is the same "principle of least privilege" idea as the read-only DB user in your reference doc, applied at the tool layer too.
-5. **Two-tier model usage** — cheap model for bulk classification, stronger model for the agent/insight-writing, and you can justify *why* per task.
+Suggested frontend flow:
 
----
-
-## 10. Suggested Repo Structure
-
-```
-project/
-├── data/
-│   ├── raw/youtube.csv
-│   ├── processed/youtube_clean.parquet
-│   └── youtube.db                 # read-only SQLite for the agent
-├── notebooks/
-│   ├── 01_cleaning.ipynb
-│   ├── 02_eda.ipynb
-│   └── 03_visualization.ipynb
-├── scripts/
-│   ├── categorize_videos.py       # batched LLM classification job
-│   └── build_sqlite_db.py
-├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── routers/
-│   │   │   ├── stats.py
-│   │   │   └── ai.py
-│   │   ├── services/
-│   │   │   ├── data_service.py    # reads Parquet, precomputed aggregates
-│   │   │   └── sql_agent.py       # LangChain create_agent + tools
-│   │   └── db/connection.py
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── api/
-│   └── package.json
-└── README.md
-```
+1. Load `/stats/summary` for KPI cards.
+2. Load chart endpoints in parallel.
+3. Update charts when filters change.
+4. Keep AI calls manually triggered, not automatic on every filter change.
 
 ---
 
-## 11. Build Order Summary
+## 12. README Requirements
 
-1. Data cleaning notebook (§3)
-2. EDA notebook, including batched LLM categorization job run once and cached (§4, §6)
-3. Visualization notebook (§5)
-4. Build `youtube.db` from the cleaned Parquet (§7.1)
-5. FastAPI `/stats/*` endpoints reading Parquet directly (§7, steps 1–4)
-6. FastAPI `/ai/insights` (simple single-call LLM endpoint) (§7, step 5)
-7. LangChain agent + `/ai/ask` (§7.2–7.3)
-8. Frontend dashboard against `/stats/*` (§8, steps 1–5)
-9. Frontend AI chat panel against `/ai/ask` + `/ai/insights` (§8, step 6)
-10. Write up the AI-engineering rigor section for your report (§9)
+The final `README.md` should be written as an executive summary of the project, not as setup notes only.
 
+Include:
+
+1. Project title.
+2. Problem statement.
+3. Executive summary of process, findings, and recommendations.
+4. File directory / table of contents.
+5. Data source and data dictionary.
+6. Description of cleaned data and engineered features.
+7. Key visualizations.
+8. Conclusions and recommendations.
+9. Areas for further research.
+10. Sources.
+11. Instructions to run the notebook.
+12. Instructions to run the FastAPI backend.
+13. Instructions to run the React dashboard.
+14. Notes explaining the LangChain/LLM features and their constraints.
+
+The starter README from `project-req/README.md` must not remain as the final project README.
+
+---
+
+## 13. Presentation Requirements
+
+The presentation is for a non-technical audience and should be about 5 minutes, with an allowed range of 5-7 minutes.
+
+Required content:
+
+1. Cover page with project title, name, and cohort.
+2. Concise problem statement.
+3. Key metrics, time coverage, and location/region if applicable.
+4. High-level methodology with no code.
+5. Primary findings supported by charts.
+6. Data-driven recommendations.
+7. Dashboard demo or screenshots if time allows.
+8. Next steps or further research.
+
+Presentation standards:
+
+1. A chart slide should mostly contain the chart.
+2. Avoid text boxes on chart slides.
+3. Use one line of title text at the top.
+4. Format values clearly.
+5. Use readable font sizes.
+6. Keep colors consistent and high contrast.
+7. Do not speculate beyond the data.
+8. Export final slides to PDF and place them under `presentation/`.
+
+---
+
+## 14. Build Order
+
+Follow this order to avoid building UI before the data is stable:
+
+1. Choose final dataset and place it under `data/raw/`.
+2. Create or rename the main notebook to `notebooks/01_youtube_trending_eda.ipynb`.
+3. Define the final problem statement and objectives.
+4. Load, inspect, clean, and document the data.
+5. Save cleaned data to `data/processed/`.
+6. Perform EDA aligned to each objective.
+7. Create polished notebook visualizations and written interpretations.
+8. Write conclusions and data-driven recommendations.
+9. Build `data/youtube.db` from the cleaned data.
+10. Build FastAPI `/stats/*` endpoints.
+11. Build the React dashboard visualizations against `/stats/*`.
+12. Build `/ai/insights`.
+13. Build the LangChain SQL agent and `/ai/ask`.
+14. Add the React AI insights and chat UI.
+15. Write the final `README.md`.
+16. Create the presentation slideshow and export it as PDF.
+17. Clean the repo before submission.
+18. Restart and rerun the notebook from top to bottom.
+19. Run the backend and frontend locally to confirm the app works.
+
+---
+
+## 15. Submission Checklist
+
+Before submitting the GitHub repository, confirm:
+
+1. `README.md` is the final project README, not the starter instructions.
+2. Notebook runs without errors from a fresh kernel.
+3. Notebook includes markdown explanations, visualizations, summary, and recommendations.
+4. Data files or data source links are included and documented.
+5. FastAPI backend runs locally.
+6. React dashboard runs locally.
+7. React charts use backend data, not hardcoded final results.
+8. AI endpoints are isolated under `/ai/*` and do not control chart rendering.
+9. LangChain SQL access is read-only and query-limited.
+10. Presentation PDF exists.
+11. Repo has no unnecessary generated files.
+12. File and folder names are clear and consistent.
+13. All paths are relative.
+14. Recommendations are supported by analysis.
+15. Presentation is non-technical and timed to 5-7 minutes.
+16. Any AI-assisted learning or AI functionality complies with instructor policy.

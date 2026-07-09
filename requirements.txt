@@ -2,3 +2,8 @@ fastapi
 uvicorn[standard]
 jupyter
 ipykernel
+pandas
+numpy
+pyarrow
+matplotlib
+seaborn
