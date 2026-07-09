@@ -30,3 +30,9 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# Data
+data/
+data/*
+*.csv
+*.db
